@@ -2,15 +2,20 @@ const axios = require("axios");
 const { processReportOutput } = require("./reportOutputCleaner");
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const MODEL = "meta-llama/llama-3.3-70b-instruct:free";
+const MODEL = "arcee-ai/trinity-large-preview:free";
 
+/**
+ * Call LLM with text and/or images
+ * @param {Array} messages - Array of message objects with role and content
+ * @returns {string} - AI response
+ */
 async function callLLM(messages) {
   const response = await axios.post(
     OPENROUTER_URL,
     {
       model: MODEL,
       messages,
-      temperature: 0.1, // Lower temperature for more consistent output
+      temperature: 0.1,
     },
     {
       headers: {
@@ -25,7 +30,9 @@ async function callLLM(messages) {
   return response.data.choices[0].message.content;
 }
 
-// 🗨️ Chat mode
+/**
+ * 💬 Chat mode - text only
+ */
 async function hiaChat({ history = [], userMessage }) {
   return callLLM([
     {
@@ -63,8 +70,40 @@ Use simple, calm language.
   ]);
 }
 
-// 📄 Report → Insight mode (STRICT CLASSIFICATION ONLY)
-async function analyzeReport(reportText) {
+/**
+ * 📄 Report → Insight mode with MULTIMODAL SUPPORT
+ * Accepts both text and images (base64 encoded)
+ * 
+ * @param {Object} options
+ * @param {string} options.reportText - Plain text of report (optional)
+ * @param {string} options.imageBase64 - Base64 encoded image (optional)
+ * @param {string} options.imageType - Image MIME type (e.g., 'image/jpeg', 'image/png')
+ * @returns {string} - Formatted analysis
+ */
+async function analyzeReport({ reportText, imageBase64, imageType = 'image/jpeg' }) {
+  // Build the user message content
+  const userContent = [];
+
+  // Add image if provided
+  if (imageBase64) {
+    userContent.push({
+      type: "image_url",
+      image_url: {
+        url: `data:${imageType};base64,${imageBase64}`
+      }
+    });
+  }
+
+  // Add text instruction
+  const instruction = reportText 
+    ? `Please analyze this medical report:\n\n${reportText}`
+    : "Please analyze the medical report in this image.";
+
+  userContent.push({
+    type: "text",
+    text: instruction
+  });
+
   const rawOutput = await callLLM([
     {
       role: "system",
@@ -120,7 +159,7 @@ Your output should be ONLY the categorized list above. Nothing else.
     },
     {
       role: "user",
-      content: reportText,
+      content: userContent,
     },
   ]);
 
@@ -129,13 +168,11 @@ Your output should be ONLY the categorized list above. Nothing else.
 
   if (!result.success) {
     console.error('Output cleaning failed:', result.error);
-    // Return cleaned version even if validation failed
     return result.cleaned || rawOutput;
   }
 
   return result.output;
 }
-
 
 module.exports = {
   hiaChat,

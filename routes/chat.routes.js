@@ -27,9 +27,8 @@ router.post('/chats', auth, async (req, res) => {
   }
 });
 
-/**
- *  SEND MESSAGE IN CHAT
- */
+
+// 1 SEND MESSAGE IN CHAT
 router.post('/chats/:id/messages', auth, async (req, res) => {
   try {
     const chatId = req.params.id;
@@ -98,7 +97,7 @@ Overall, your results indicate a healthy profile. Continue maintaining a balance
   }
 });
 
-//  1. Search chats 
+//  . Search chats 
 router.get('/chats/search', auth, async (req, res) => {
   try {
     const q = req.query.q || '';
@@ -116,7 +115,7 @@ router.get('/chats/search', auth, async (req, res) => {
 });
 
 
-//  2. Get all chats
+//  3. Get all chats
 router.get('/chats', auth, async (req, res) => {
   try {
     const chats = await Chat.find({ userId: req.userId })
@@ -130,7 +129,7 @@ router.get('/chats', auth, async (req, res) => {
 });
 
 
-//  3. Get chat by ID 
+//  4. Get chat by ID 
 router.get('/chats/:id', auth, async (req, res) => {
   try {
     const chat = await Chat.findOne({
@@ -150,7 +149,7 @@ router.get('/chats/:id', auth, async (req, res) => {
 });
 
 
-// Delete a specific chat for logged-in user
+//  5. Delete a specific chat for logged-in user
 router.delete('/chats/:id', auth, async (req, res) => {
   try {
     const chat = await Chat.findOneAndDelete({
@@ -166,6 +165,43 @@ router.delete('/chats/:id', auth, async (req, res) => {
   } catch (err) {
     console.error('Delete chat error:', err);
     res.status(500).json({ error: 'Failed to delete chat' });
+  }
+});
+
+
+ // 6. RENAME CHAT TITLE
+router.put('/chats/:id/rename', auth, async (req, res) => {
+  try {
+    const chatId = req.params.id;
+    const { title } = req.body;
+
+    if (!title || title.trim().length < 3) {
+      return res.status(400).json({
+        error: 'Title must be at least 3 characters'
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(chatId)) {
+      return res.status(400).json({ error: 'Invalid chat ID' });
+    }
+
+    const chat = await Chat.findOneAndUpdate(
+      { _id: chatId, userId: req.userId }, // ownership check
+      { title: title.trim(), updatedAt: new Date() },
+      { new: true }
+    ).select('_id title updatedAt');
+
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+
+    res.json({
+      message: 'Chat renamed successfully',
+      chat
+    });
+  } catch (err) {
+    console.error('Rename chat error:', err);
+    res.status(500).json({ error: 'Failed to rename chat' });
   }
 });
 
