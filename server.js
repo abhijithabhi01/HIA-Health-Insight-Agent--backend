@@ -20,9 +20,9 @@ app.use(bodyParser.urlencoded({ extended: true }));
 connectDB();
 
 // Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/analysis', analysisRoutes);
-app.use('/api', chatRoutes);
+app.use('/auth', authRoutes);
+app.use('/analysis', analysisRoutes);
+app.use('/', chatRoutes);
 
 // Root route HTML response
 app.get('/', (req, res) => {
@@ -140,7 +140,7 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📊 Health Insight Agent API ready`);
+  console.log(`📊 Health Insight Agent API Configured`);
 });
 
 // Test OpenRouter integration

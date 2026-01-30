@@ -12,7 +12,7 @@ const upload = multer({
     fileSize: 10 * 1024 * 1024, // 10MB limit
   },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png'];
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
     
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
@@ -31,7 +31,7 @@ function bufferToBase64(buffer) {
 
 /**
  * POST /api/analysis/report
- * Analyze report from text input
+ * Analyze report from text input (EXISTING ENDPOINT - UNCHANGED)
  */
 router.post('/report', auth, async (req, res) => {
   try {
@@ -52,8 +52,7 @@ router.post('/report', auth, async (req, res) => {
 
 /**
  * POST /api/analysis/upload
- * Analyze report from uploaded image
- * RECOMMENDED: Send image directly to model for best results
+ * Analyze report from uploaded image (NEW ENDPOINT)
  */
 router.post('/upload', auth, upload.single('file'), async (req, res) => {
   try {
@@ -62,10 +61,12 @@ router.post('/upload', auth, upload.single('file'), async (req, res) => {
     }
 
     const file = req.file;
-    console.log('Processing file:', file.originalname, file.mimetype);
+    console.log('📤 Processing file:', file.originalname, file.mimetype, `${(file.size / 1024).toFixed(2)} KB`);
 
     // Convert image to base64
     const base64Image = bufferToBase64(file.buffer);
+    
+    console.log('🔄 Sending to AI model...');
     
     // Send directly to model
     const insight = await analyzeReport({
@@ -73,26 +74,36 @@ router.post('/upload', auth, upload.single('file'), async (req, res) => {
       imageType: file.mimetype
     });
 
+    console.log('✅ Analysis complete');
+
     res.json({ 
       insight,
       fileName: file.originalname,
-      fileType: file.mimetype
+      fileType: file.mimetype,
+      fileSize: file.size
     });
     
   } catch (err) {
-    console.error("File upload analysis error:", err);
+    console.error("❌ File upload analysis error:", err);
     
     if (err.message && err.message.includes('Invalid file type')) {
       return res.status(400).json({ error: err.message });
     }
     
-    res.status(500).json({ error: "Failed to analyze uploaded file" });
+    if (err.message && err.message.includes('File too large')) {
+      return res.status(400).json({ error: 'File is too large. Maximum size is 10MB.' });
+    }
+    
+    res.status(500).json({ 
+      error: "Failed to analyze uploaded file",
+      details: err.message 
+    });
   }
 });
 
 /**
  * POST /api/analysis/hybrid
- * Analyze report from both text and image
+ * Analyze report from both text and image (NEW ENDPOINT)
  * Useful when user wants to add notes to an uploaded report
  */
 router.post('/hybrid', auth, upload.single('file'), async (req, res) => {
@@ -105,6 +116,10 @@ router.post('/hybrid', auth, upload.single('file'), async (req, res) => {
         error: "Either report text or file is required" 
       });
     }
+
+    console.log('📤 Processing hybrid request');
+    if (file) console.log('  - File:', file.originalname, file.mimetype);
+    if (reportText) console.log('  - Text length:', reportText.length, 'characters');
 
     let insight;
 
@@ -130,6 +145,8 @@ router.post('/hybrid', auth, upload.single('file'), async (req, res) => {
       insight = await analyzeReport({ reportText });
     }
 
+    console.log('✅ Hybrid analysis complete');
+
     res.json({ 
       insight,
       source: file ? (reportText ? 'both' : 'file') : 'text',
@@ -137,8 +154,11 @@ router.post('/hybrid', auth, upload.single('file'), async (req, res) => {
     });
     
   } catch (err) {
-    console.error("Hybrid analysis error:", err);
-    res.status(500).json({ error: "Failed to analyze report" });
+    console.error("❌ Hybrid analysis error:", err);
+    res.status(500).json({ 
+      error: "Failed to analyze report",
+      details: err.message 
+    });
   }
 });
 

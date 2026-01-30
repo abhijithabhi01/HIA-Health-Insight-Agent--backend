@@ -2,39 +2,81 @@ const axios = require("axios");
 const { processReportOutput } = require("./reportOutputCleaner");
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const MODEL = "arcee-ai/trinity-large-preview:free";
+
+// Step 1: Use free vision model for OCR (image to text)
+const VISION_MODEL = "allenai/molmo-2-8b:free"; // Best free vision model
+
+// Step 2: Use your preferred text model for analysis
+const TEXT_MODEL = "arcee-ai/trinity-large-preview:free"; // Your original model
 
 /**
- * Call LLM with text and/or images
- * @param {Array} messages - Array of message objects with role and content
- * @returns {string} - AI response
+ * Call LLM with error handling
  */
-async function callLLM(messages) {
-  const response = await axios.post(
-    OPENROUTER_URL,
-    {
-      model: MODEL,
-      messages,
-      temperature: 0.1,
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:5000",
-        "X-Title": "Health Insight Agent",
+async function callLLM(model, messages) {
+  try {
+    const response = await axios.post(
+      OPENROUTER_URL,
+      {
+        model: model,
+        messages,
+        temperature: 0.1,
       },
-    }
-  );
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "http://localhost:5000",
+          "X-Title": "Health Insight Agent",
+        },
+      }
+    );
 
-  return response.data.choices[0].message.content;
+    return response.data.choices[0].message.content;
+  } catch (error) {
+    console.error(`❌ LLM Error (${model}):`, error.response?.data || error.message);
+    throw error;
+  }
 }
 
 /**
- * 💬 Chat mode - text only
+ * Extract text from image using vision model
  */
+async function extractTextFromImage(imageBase64, imageType) {
+  console.log('📸 Step 1: Extracting text from image...');
+  
+  const userContent = [
+    {
+      type: "image_url",
+      image_url: {
+        url: `data:${imageType};base64,${imageBase64}`
+      }
+    },
+    {
+      type: "text",
+      text: "Extract all text from this medical report image. Include ALL values, test names, reference ranges, and any other text visible in the image. Output ONLY the extracted text, nothing else."
+    }
+  ];
+
+  const extractedText = await callLLM(VISION_MODEL, [
+    {
+      role: "system",
+      content: "You are a precise OCR system. Extract ALL text from images accurately, preserving numbers, units, and formatting. Output ONLY the extracted text."
+    },
+    {
+      role: "user",
+      content: userContent
+    }
+  ]);
+
+  console.log('✅ Step 1 complete: Text extracted');
+  console.log('📝 Extracted text length:', extractedText.length, 'characters');
+  
+  return extractedText;
+}
+
+// 🗨️ Chat mode (unchanged)
 async function hiaChat({ history = [], userMessage }) {
-  return callLLM([
+  return callLLM(TEXT_MODEL, [
     {
       role: "system",
       content: `
@@ -71,40 +113,39 @@ Use simple, calm language.
 }
 
 /**
- * 📄 Report → Insight mode with MULTIMODAL SUPPORT
- * Accepts both text and images (base64 encoded)
- * 
- * @param {Object} options
- * @param {string} options.reportText - Plain text of report (optional)
- * @param {string} options.imageBase64 - Base64 encoded image (optional)
- * @param {string} options.imageType - Image MIME type (e.g., 'image/jpeg', 'image/png')
- * @returns {string} - Formatted analysis
+ * 📄 Report → Insight mode with TWO-STEP PROCESSING
+ * Step 1: Extract text from image (if provided) using vision model
+ * Step 2: Analyze text using Trinity model
  */
 async function analyzeReport({ reportText, imageBase64, imageType = 'image/jpeg' }) {
-  // Build the user message content
-  const userContent = [];
+  let textToAnalyze = reportText;
 
-  // Add image if provided
+  // Step 1: If image provided, extract text first
   if (imageBase64) {
-    userContent.push({
-      type: "image_url",
-      image_url: {
-        url: `data:${imageType};base64,${imageBase64}`
+    try {
+      const extractedText = await extractTextFromImage(imageBase64, imageType);
+      
+      // Combine with user-provided text if any
+      if (reportText) {
+        textToAnalyze = `${extractedText}\n\nAdditional Notes:\n${reportText}`;
+      } else {
+        textToAnalyze = extractedText;
       }
-    });
+    } catch (error) {
+      console.error('❌ Image text extraction failed:', error.message);
+      
+      // If vision model fails, inform user
+      if (error.response?.status === 429) {
+        throw new Error('Vision model rate limit exceeded. Please wait a moment and try again, or use text input instead.');
+      }
+      throw new Error('Failed to extract text from image. Please try again or use text input.');
+    }
   }
 
-  // Add text instruction
-  const instruction = reportText 
-    ? `Please analyze this medical report:\n\n${reportText}`
-    : "Please analyze the medical report in this image.";
-
-  userContent.push({
-    type: "text",
-    text: instruction
-  });
-
-  const rawOutput = await callLLM([
+  // Step 2: Analyze the text using Trinity model
+  console.log('🔍 Step 2: Analyzing extracted text...');
+  
+  const rawOutput = await callLLM(TEXT_MODEL, [
     {
       role: "system",
       content: `
@@ -159,9 +200,11 @@ Your output should be ONLY the categorized list above. Nothing else.
     },
     {
       role: "user",
-      content: userContent,
+      content: `Please analyze this medical report text:\n\n${textToAnalyze}`,
     },
   ]);
+
+  console.log('✅ Step 2 complete: Analysis finished');
 
   // Clean and validate the output
   const result = processReportOutput(rawOutput);
@@ -173,6 +216,7 @@ Your output should be ONLY the categorized list above. Nothing else.
 
   return result.output;
 }
+
 
 module.exports = {
   hiaChat,

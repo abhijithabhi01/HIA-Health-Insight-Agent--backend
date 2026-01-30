@@ -3,6 +3,8 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
+const Chat = require('../models/Chat');
+const Report = require('../models/Report');
 
 // Register
 router.post('/register', async (req, res, next) => {
@@ -65,6 +67,29 @@ router.get('/profile', auth, async (req, res, next) => {
     const user = await User.findById(req.userId).select('-password');
     res.json(user);
   } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE ACCOUNT (Delete user + all chats + reports)
+router.delete('/delete', auth, async (req, res, next) => {
+  try {
+    const userId = req.userId;
+
+    // 1. Delete all chats of the user
+    await Chat.deleteMany({ userId });
+
+    // 2. Delete all reports of the user
+    await Report.deleteMany({ userId });
+
+    // 3. Delete the user account
+    await User.findByIdAndDelete(userId);
+
+    res.json({
+      message: 'Account and all related data deleted successfully'
+    });
+  } catch (err) {
+    console.error('Delete account error:', err);
     next(err);
   }
 });
