@@ -47,45 +47,20 @@ router.post('/chats/:id/messages', auth, async (req, res) => {
       return res.status(404).json({ error: 'Chat not found' });
     }
 
-    // Save user message
-    chat.messages.push({ role: 'user', content: message });
+    // Build history from existing messages (don't include the new user message yet)
+    const history = chat.messages.map(m => ({
+      role: m.role,
+      content: m.content
+    }));
 
-    // Call LLM
+    // Call LLM with history and new user message
     const reply = await hiaChat({
-      systemPrompt: `
-You are Health Insight Agent (HIA).
-Explain health topics clearly and safely.
-Do not diagnose or prescribe medication.
-Use calm, simple language.
-
-IMPORTANT: Always format your responses as clear, organized bullet points.
-- Start with a brief 1-2 sentence introduction
-- Then break down information into bullet points using "•" or "-"
-- Each point should be concise and focused on one key piece of information
-- Use sub-bullets for additional details when needed
-- End with a brief summary or recommendation if appropriate
-
-Example format:
-Here's what your results show:
-
-• **Fasting Blood Sugar**: 100 mg/dL - Within normal range (70-100 mg/dL)
-• **HbA1c**: 5.4% - Good control, indicates healthy average blood sugar over past 2-3 months
-• **Total Cholesterol**: 180 mg/dL - Below recommended level (<200 mg/dL)
-  - HDL (good cholesterol): 52 mg/dL - Above recommended level (>40 mg/dL)
-  - LDL (bad cholesterol): 110 mg/dL - Below recommended level (<130 mg/dL)
-• **Hemoglobin**: 14.5 g/dL - Within healthy range (13-17 g/dL)
-• **Blood Pressure**: 120/80 mmHg - Normal and healthy
-
-Overall, your results indicate a healthy profile. Continue maintaining a balanced lifestyle!
-      `,
-      history: chat.messages.map(m => ({
-        role: m.role,
-        content: m.content
-      })),
+      history: history,
       userMessage: message
     });
 
-    // Save assistant reply
+    // Now save both user message and assistant reply to chat
+    chat.messages.push({ role: 'user', content: message });
     chat.messages.push({ role: 'assistant', content: reply });
     chat.updatedAt = new Date();
     await chat.save();
