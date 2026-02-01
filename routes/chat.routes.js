@@ -53,15 +53,29 @@ router.post('/chats/:id/messages', auth, async (req, res) => {
       content: m.content
     }));
 
-    // Call LLM with history and new user message
-    const reply = await hiaChat({
-      history: history,
-      userMessage: message
-    });
-
-    // Now save both user message and assistant reply to chat
+    // Save user message first
     chat.messages.push({ role: 'user', content: message });
-    chat.messages.push({ role: 'assistant', content: reply });
+    
+    let reply;
+    try {
+      // Call LLM with history and new user message
+      reply = await hiaChat({
+        history: history,
+        userMessage: message
+      });
+
+      // Save assistant reply if LLM call succeeds
+      chat.messages.push({ role: 'assistant', content: reply });
+    } catch (llmError) {
+      console.error('LLM call failed:', llmError);
+      
+      // Save an error message as assistant reply
+      const errorReply = 'Sorry, I encountered an error processing your message. Please try again.';
+      chat.messages.push({ role: 'assistant', content: errorReply });
+      reply = errorReply;
+    }
+
+    // Save chat with updated messages
     chat.updatedAt = new Date();
     await chat.save();
 

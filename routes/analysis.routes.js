@@ -56,6 +56,8 @@ router.post('/report', auth, async (req, res) => {
  * Analyze report from uploaded image and SAVE TO CHAT
  */
 router.post('/upload', auth, upload.single('file'), async (req, res) => {
+  let chat = null;
+  
   try {
     if (!req.file) {
       return res.status(400).json({ error: "No file uploaded" });
@@ -71,18 +73,7 @@ router.post('/upload', auth, upload.single('file'), async (req, res) => {
     // Create data URL for frontend display
     const imageDataUrl = `data:${file.mimetype};base64,${base64Image}`;
     
-    console.log('🔄 Sending to AI model...');
-    
-    // Analyze the image
-    const insight = await analyzeReport({
-      imageBase64: base64Image,
-      imageType: file.mimetype
-    });
-
-    console.log('✅ Analysis complete');
-
     // Find or create chat
-    let chat;
     if (chatId) {
       chat = await Chat.findOne({ _id: chatId, userId: req.userId });
       if (!chat) {
@@ -112,6 +103,27 @@ router.post('/upload', auth, upload.single('file'), async (req, res) => {
       timestamp: new Date()
     };
 
+    // Save user message first
+    chat.messages.push(userMessage);
+
+    let insight;
+    try {
+      console.log('🔄 Sending to AI model...');
+      
+      // Analyze the image
+      insight = await analyzeReport({
+        imageBase64: base64Image,
+        imageType: file.mimetype
+      });
+
+      console.log('✅ Analysis complete');
+    } catch (analysisError) {
+      console.error('❌ Analysis failed:', analysisError);
+      
+      // Save error message as assistant reply
+      insight = 'Sorry, I encountered an error analyzing your medical report. Please try again or try uploading a different image.';
+    }
+
     // Create assistant message object
     const assistantMessage = {
       role: 'assistant',
@@ -120,8 +132,7 @@ router.post('/upload', auth, upload.single('file'), async (req, res) => {
       timestamp: new Date()
     };
 
-    // Push messages
-    chat.messages.push(userMessage);
+    // Push assistant message
     chat.messages.push(assistantMessage);
     chat.updatedAt = new Date();
     
@@ -162,6 +173,8 @@ router.post('/upload', auth, upload.single('file'), async (req, res) => {
  * Analyze report from both text and image and SAVE TO CHAT
  */
 router.post('/hybrid', auth, upload.single('file'), async (req, res) => {
+  let chat = null;
+  
   try {
     const { reportText, chatId } = req.body;
     const file = req.file;
@@ -176,37 +189,9 @@ router.post('/hybrid', auth, upload.single('file'), async (req, res) => {
     if (file) console.log('  - File:', file.originalname, file.mimetype);
     if (reportText) console.log('  - Text length:', reportText.length, 'characters');
 
-    let insight;
     let imageDataUrl = null;
-
-    if (file && reportText) {
-      // Both provided - send image with additional text context
-      const base64Image = bufferToBase64(file.buffer);
-      imageDataUrl = `data:${file.mimetype};base64,${base64Image}`;
-      
-      insight = await analyzeReport({
-        reportText,
-        imageBase64: base64Image,
-        imageType: file.mimetype
-      });
-    } else if (file) {
-      // Only file
-      const base64Image = bufferToBase64(file.buffer);
-      imageDataUrl = `data:${file.mimetype};base64,${base64Image}`;
-      
-      insight = await analyzeReport({
-        imageBase64: base64Image,
-        imageType: file.mimetype
-      });
-    } else {
-      // Only text
-      insight = await analyzeReport({ reportText });
-    }
-
-    console.log('✅ Hybrid analysis complete');
-
-    // Find or create chat
-    let chat;
+    
+    // Find or create chat first
     if (chatId) {
       chat = await Chat.findOne({ _id: chatId, userId: req.userId });
       if (!chat) {
@@ -225,6 +210,9 @@ router.post('/hybrid', auth, upload.single('file'), async (req, res) => {
     let userFiles = [];
     
     if (file) {
+      const base64Image = bufferToBase64(file.buffer);
+      imageDataUrl = `data:${file.mimetype};base64,${base64Image}`;
+      
       const fileObject = {
         name: String(file.originalname),
         type: String(file.mimetype),
@@ -241,6 +229,38 @@ router.post('/hybrid', auth, upload.single('file'), async (req, res) => {
       timestamp: new Date()
     };
 
+    // Save user message first
+    chat.messages.push(userMessage);
+
+    let insight;
+    try {
+      // Try to analyze
+      if (file && reportText) {
+        // Both provided
+        const base64Image = bufferToBase64(file.buffer);
+        insight = await analyzeReport({
+          reportText,
+          imageBase64: base64Image,
+          imageType: file.mimetype
+        });
+      } else if (file) {
+        // Only file
+        const base64Image = bufferToBase64(file.buffer);
+        insight = await analyzeReport({
+          imageBase64: base64Image,
+          imageType: file.mimetype
+        });
+      } else {
+        // Only text
+        insight = await analyzeReport({ reportText });
+      }
+
+      console.log('✅ Hybrid analysis complete');
+    } catch (analysisError) {
+      console.error('❌ Hybrid analysis failed:', analysisError);
+      insight = 'Sorry, I encountered an error analyzing your report. Please try again.';
+    }
+
     // Create assistant message
     const assistantMessage = {
       role: 'assistant',
@@ -249,8 +269,7 @@ router.post('/hybrid', auth, upload.single('file'), async (req, res) => {
       timestamp: new Date()
     };
 
-    // Push messages
-    chat.messages.push(userMessage);
+    // Push assistant message
     chat.messages.push(assistantMessage);
     chat.updatedAt = new Date();
     
