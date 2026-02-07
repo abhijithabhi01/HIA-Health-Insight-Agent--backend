@@ -6,7 +6,7 @@ const {
   submitApplication,
   getMyApplication,
   cancelApplication
-} = require('../controllers/hcApplication.controller');
+} = require('../Controllers/hcApplication_controller');
 
 /**
  * @route   POST /hc/apply
