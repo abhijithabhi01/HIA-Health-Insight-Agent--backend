@@ -10,7 +10,7 @@ const {
   approveApplication,
   rejectApplication,
   getApplicationById
-} = require('../controllers/admin.controller');
+} = require('../Controllers/admin_controller');
 
 // All admin routes require authentication + admin role
 router.use(auth);
