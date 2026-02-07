@@ -2,11 +2,17 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const path = require('path');
 const connectDB = require('./config/database');
 
+// Import routes
 const authRoutes = require('./routes/auth.routes');
 const analysisRoutes = require('./routes/analysis.routes');
 const chatRoutes = require('./routes/chat.routes');
+const hcRoutes = require('./routes/hc.routes');
+const adminRoutes = require('./routes/admin.routes');
+const fileRoutes = require('./routes/files.routes');
+const adminPanelRoutes = require('./routes/adminPanel.routes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -22,7 +28,11 @@ connectDB();
 // Routes
 app.use('/auth', authRoutes);
 app.use('/analysis', analysisRoutes);
-app.use('/', chatRoutes);
+app.use('/chat', chatRoutes);
+app.use('/hc', hcRoutes);              // HC application routes
+app.use('/admin', adminRoutes);        // Admin dashboard routes
+app.use('/files', fileRoutes);         // Secure file serving
+app.use('/admin-panel', adminPanelRoutes); // Admin UI Panel
 
 // Root route HTML response
 app.get('/', (req, res) => {
@@ -84,6 +94,23 @@ app.get('/', (req, res) => {
       font-size: 13px;
       display: inline-block;
     }
+    .admin-button {
+      display: inline-block;
+      margin-top: 16px;
+      padding: 12px 24px;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      color: white;
+      text-decoration: none;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 14px;
+      transition: transform 0.2s, box-shadow 0.2s;
+      cursor: pointer;
+    }
+    .admin-button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(59,130,246,0.3);
+    }
     .info {
       margin-top: 24px;
       text-align: left;
@@ -101,6 +128,19 @@ app.get('/', (req, res) => {
       font-size: 12px;
       color: #71717a;
     }
+    .endpoints {
+      margin-top: 20px;
+      text-align: left;
+      font-size: 12px;
+      color: #a1a1aa;
+    }
+    .endpoint {
+      padding: 6px 10px;
+      margin: 4px 0;
+      background: rgba(59, 130, 246, 0.1);
+      border-left: 2px solid #3b82f6;
+      border-radius: 4px;
+    }
   </style>
 </head>
 <body>
@@ -116,6 +156,12 @@ app.get('/', (req, res) => {
 
 
     <div class="footer">
+        <a href="/admin-panel/login" class="admin-button">
+      🔐 Admin Login
+    </a>
+    </div>
+
+    <div class="footer">
       HIA Backend © ${new Date().getFullYear()}<br/>
       Built for clarity, safety, and intelligence
     </div>
@@ -125,22 +171,13 @@ app.get('/', (req, res) => {
   `);
 });
 
-
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'OK', message: 'Health Insight Agent API is running' });
-});
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
-});
-
-
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📊 Health Insight Agent API Configured`);
+  res.json({ 
+    status: 'OK', 
+    message: 'Health Insight Agent API is running',
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Test OpenRouter integration
@@ -153,6 +190,48 @@ app.get("/test-openrouter", async (req, res) => {
   });
 
   res.json({ reply });
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Error:', err.stack);
+  
+  // Mongoose validation error
+  if (err.name === 'ValidationError') {
+    return res.status(400).json({ 
+      error: 'Validation error', 
+      details: Object.values(err.errors).map(e => e.message) 
+    });
+  }
+  
+  // Mongoose duplicate key error
+  if (err.code === 11000) {
+    return res.status(400).json({ 
+      error: 'Duplicate entry', 
+      field: Object.keys(err.keyPattern)[0] 
+    });
+  }
+  
+  // JWT errors
+  if (err.name === 'JsonWebTokenError') {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+  
+  if (err.name === 'TokenExpiredError') {
+    return res.status(401).json({ error: 'Token expired' });
+  }
+  
+  // Default error
+  res.status(err.status || 500).json({ 
+    error: err.message || 'Something went wrong!' 
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`✅ Server running on http://localhost:${PORT}`);
+  console.log(`✅ Health Insight Agent API Configured`);
+  console.log(`✅ HC Application System: Active`);
+  console.log(`✅ Admin Dashboard: Active`);
 });
 
 module.exports = app;

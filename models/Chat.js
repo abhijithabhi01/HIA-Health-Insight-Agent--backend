@@ -1,22 +1,12 @@
 const mongoose = require('mongoose');
 
-// Define file subdocument schema explicitly
-const fileSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: false
-  },
-  type: {
-    type: String,
-    required: false
-  },
-  url: {
-    type: String,
-    required: false
-  }
-}, { _id: false }); // Don't create _id for subdocuments
+const FileSchema = new mongoose.Schema({
+  name: { type: String, required: false },
+  type: { type: String, required: false },
+  url: { type: String, required: false }
+}, { _id: false, strict: false });
 
-const messageSchema = new mongoose.Schema({
+const MessageSchema = new mongoose.Schema({
   role: {
     type: String,
     enum: ['user', 'assistant'],
@@ -27,16 +17,26 @@ const messageSchema = new mongoose.Schema({
     required: true
   },
   files: {
-    type: [fileSchema],
+    type: [FileSchema],
     default: []
   },
   timestamp: {
     type: Date,
     default: Date.now
+  },
+  // New fields for HC functionality persistence
+  userRole: {
+    type: String,
+    enum: ['USER', 'HC', 'ADMIN'],
+    default: 'USER'
+  },
+  uploadedFileName: {
+    type: String,
+    default: null
   }
-}, { _id: true });
+}, { strict: false });
 
-const chatSchema = new mongoose.Schema({
+const ChatSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -44,12 +44,9 @@ const chatSchema = new mongoose.Schema({
   },
   title: {
     type: String,
-    default: 'New Analysis'
+    default: 'New Health Chat'
   },
-  messages: {
-    type: [messageSchema],
-    default: []
-  },
+  messages: [MessageSchema],
   createdAt: {
     type: Date,
     default: Date.now
@@ -60,4 +57,8 @@ const chatSchema = new mongoose.Schema({
   }
 });
 
-module.exports = mongoose.model('Chat', chatSchema);
+// Index for faster queries
+ChatSchema.index({ userId: 1, updatedAt: -1 });
+ChatSchema.index({ userId: 1, title: 'text' });
+
+module.exports = mongoose.model('Chat', ChatSchema);

@@ -1,45 +1,141 @@
 const axios = require("axios");
 const { processReportOutput } = require("./reportOutputCleaner");
+const Tesseract = require('tesseract.js');
+const PDFParser = require("pdf2json");
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-// vision model for OCR (image to text)
-const VISION_MODEL = "allenai/molmo-2-8b:free"; 
+// Use Tesseract for OCR (free, no API limits)
+const USE_TESSERACT = true;
 
-//  text model for analysis
+// Vision models for OCR (fallback if Tesseract is disabled)
+const VISION_MODEL = "allenai/molmo-2-8b:free"; 
+const VISION_MODEL_FALLBACK = "meta-llama/llama-3.2-11b-vision-instruct:free";
+
+// Text model for analysis
 const TEXT_MODEL = "arcee-ai/trinity-large-preview:free"; 
 
 /**
- * Call LLM with error handling
+ * Call LLM with error handling and retry logic
  */
-async function callLLM(model, messages) {
-  try {
-    const response = await axios.post(
-      OPENROUTER_URL,
-      {
-        model: model,
-        messages,
-        temperature: 0.1,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": "http://localhost:5000",
-          "X-Title": "Health Insight Agent",
+async function callLLM(model, messages, retries = 2) {
+  let lastError;
+  
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      if (attempt > 0) {
+        console.log(`🔄 Retry attempt ${attempt}/${retries} for ${model}...`);
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+      }
+
+      const response = await axios.post(
+        OPENROUTER_URL,
+        {
+          model: model,
+          messages,
+          temperature: 0.1,
         },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://localhost:5000",
+            "X-Title": "Health Insight Agent",
+          },
+          timeout: 60000,
+        }
+      );
+
+      return response.data.choices[0].message.content;
+    } catch (error) {
+      lastError = error;
+      
+      const isRetryable = 
+        error.code === 'ECONNRESET' ||
+        error.code === 'ETIMEDOUT' ||
+        error.code === 'ECONNREFUSED' ||
+        error.response?.status === 429 ||
+        error.response?.status >= 500;
+      
+      if (!isRetryable || attempt === retries) {
+        break;
+      }
+      
+      console.log(`⚠️ Retryable error on attempt ${attempt + 1}: ${error.code || error.message}`);
+    }
+  }
+  
+  console.error(`❌ LLM Error (${model}) after ${retries + 1} attempts:`, lastError.response?.data || lastError.message);
+  throw lastError;
+}
+
+/**
+ * Extract text from PDF using pdf2json
+ */
+async function extractTextFromPDF(pdfBuffer) {
+  console.log('📄 Extracting text from PDF using pdf2json...');
+  
+  return new Promise((resolve, reject) => {
+    const pdfParser = new PDFParser();
+    
+    pdfParser.on("pdfParser_dataError", errData => {
+      reject(new Error(errData.parserError));
+    });
+    
+    pdfParser.on("pdfParser_dataReady", pdfData => {
+      try {
+        let text = '';
+        pdfData.Pages.forEach(page => {
+          page.Texts.forEach(textItem => {
+            text += decodeURIComponent(textItem.R[0].T) + ' ';
+          });
+        });
+        
+        console.log('✅ PDF extraction complete');
+        console.log('📝 Extracted text length:', text.length, 'characters');
+        console.log('📄 Number of pages:', pdfData.Pages.length);
+        
+        resolve(text.trim());
+      } catch (err) {
+        reject(err);
+      }
+    });
+    
+    pdfParser.parseBuffer(pdfBuffer);
+  });
+}
+
+/**
+ * Extract text from image using Tesseract OCR
+ */
+async function extractTextWithTesseract(imageBuffer) {
+  console.log('📸 Extracting text with Tesseract OCR...');
+  
+  try {
+    const { data: { text } } = await Tesseract.recognize(
+      imageBuffer,
+      'eng',
+      {
+        logger: m => {
+          if (m.status === 'recognizing text') {
+            console.log(`📊 OCR Progress: ${Math.round(m.progress * 100)}%`);
+          }
+        }
       }
     );
-
-    return response.data.choices[0].message.content;
+    
+    console.log('✅ OCR complete');
+    console.log('📝 Extracted text length:', text.length, 'characters');
+    
+    return text.trim();
   } catch (error) {
-    console.error(`❌ LLM Error (${model}):`, error.response?.data || error.message);
-    throw error;
+    console.error('❌ Tesseract OCR failed:', error);
+    throw new Error('Failed to extract text from image using OCR');
   }
 }
 
 /**
- * Extract text from image using vision model
+ * Extract text from image using vision model with fallback
  */
 async function extractTextFromImage(imageBase64, imageType) {
   console.log('📸 Step 1: Extracting text from image...');
@@ -57,16 +153,31 @@ async function extractTextFromImage(imageBase64, imageType) {
     }
   ];
 
-  const extractedText = await callLLM(VISION_MODEL, [
-    {
-      role: "system",
-      content: "You are a precise OCR system. Extract ALL text from images accurately, preserving numbers, units, and formatting. Output ONLY the extracted text."
-    },
-    {
-      role: "user",
-      content: userContent
+  const systemMessage = {
+    role: "system",
+    content: "You are a precise OCR system. Extract ALL text from images accurately, preserving numbers, units, and formatting. Output ONLY the extracted text."
+  };
+
+  const userMessage = {
+    role: "user",
+    content: userContent
+  };
+
+  let extractedText;
+  
+  try {
+    extractedText = await callLLM(VISION_MODEL, [systemMessage, userMessage]);
+  } catch (primaryError) {
+    console.log('⚠️ Primary vision model failed, trying fallback...');
+    
+    try {
+      extractedText = await callLLM(VISION_MODEL_FALLBACK, [systemMessage, userMessage], 1);
+      console.log('✅ Fallback vision model succeeded');
+    } catch (fallbackError) {
+      console.error('❌ Both vision models failed');
+      throw primaryError;
     }
-  ]);
+  }
 
   console.log('✅ Step 1 complete: Text extracted');
   console.log('📝 Extracted text length:', extractedText.length, 'characters');
@@ -74,7 +185,9 @@ async function extractTextFromImage(imageBase64, imageType) {
   return extractedText;
 }
 
-// 🗨️ Chat mode
+/**
+ * Chat mode
+ */
 async function hiaChat({ history = [], userMessage }) {
   return callLLM(TEXT_MODEL, [
     {
@@ -117,42 +230,56 @@ Keep responses concise, factual, and educational.`,
 }
 
 /**
- * 📄 Report → Insight mode with TWO-STEP PROCESSING
- * Step 1: Extract text from image (if provided) using vision model
- * Step 2: Analyze text using Trinity model
+ * Get system prompt based on user role
  */
-async function analyzeReport({ reportText, imageBase64, imageType = 'image/jpeg' }) {
-  let textToAnalyze = reportText;
+function getAnalysisSystemPrompt(userRole) {
+  if (userRole === 'HC' || userRole === 'ADMIN') {
+    // Healthcare professional prompt - detailed with clinical insights
+    return `
+You are Health Insight Agent (HIA) in HEALTHCARE PROFESSIONAL mode. You are assisting a certified healthcare assistant.
 
-  // Step 1: If image provided, extract text first
-  if (imageBase64) {
-    try {
-      const extractedText = await extractTextFromImage(imageBase64, imageType);
-      
-      // Combine with user-provided text if any
-      if (reportText) {
-        textToAnalyze = `${extractedText}\n\nAdditional Notes:\n${reportText}`;
-      } else {
-        textToAnalyze = extractedText;
-      }
-    } catch (error) {
-      console.error('❌ Image text extraction failed:', error.message);
-      
-      // If vision model fails, inform user
-      if (error.response?.status === 429) {
-        throw new Error('Vision model rate limit exceeded. Please wait a moment and try again, or use text input instead.');
-      }
-      throw new Error('Failed to extract text from image. Please try again or use text input.');
-    }
-  }
+RESPONSIBILITIES:
+1. Classify all test values as NORMAL, HIGH, LOW, or BORDERLINE
+2. Provide clinical context and potential causes for abnormal values
+3. Suggest appropriate follow-up actions and monitoring recommendations
+4. Note clinically significant patterns or combinations of abnormal values
 
-  // Step 2: Analyze the text using Trinity model
-  console.log('🔍 Step 2: Analyzing extracted text...');
-  
-  const rawOutput = await callLLM(TEXT_MODEL, [
-    {
-      role: "system",
-      content: `
+OUTPUT FORMAT:
+
+📊 **[Category Name]**
+• **Parameter Name**: [Value] - [Classification]
+  └ Clinical Note: [Brief explanation of what this means, potential causes if abnormal, and monitoring/action recommendations]
+
+EXAMPLE OUTPUT:
+
+📊 **Blood & Metabolic Panel**
+• **Fasting Blood Sugar**: 145 mg/dL - HIGH
+  └ Clinical Note: Elevated fasting glucose suggests impaired glucose metabolism. Possible causes include prediabetes, diabetes, stress, or recent food intake. Recommend: HbA1c test for 3-month glucose average, assess patient history, consider glucose tolerance test if indicated.
+
+• **HbA1c**: 6.2% - BORDERLINE
+  └ Clinical Note: Borderline value indicating prediabetes range (5.7-6.4%). Requires lifestyle intervention and regular monitoring. Recommend: Retest in 3 months, assess diet and exercise patterns, screen for other metabolic syndrome markers.
+
+🧬 **Complete Blood Count (CBC)**
+• **Hemoglobin**: 10.2 g/dL - LOW
+  └ Clinical Note: Mild anemia. Possible causes: iron deficiency, chronic disease, vitamin B12/folate deficiency, blood loss. Recommend: Iron studies (ferritin, TIBC, serum iron), B12 and folate levels, assess for GI bleeding if indicated, review medications.
+
+⚠️ **Clinical Patterns Identified:**
+• Metabolic syndrome markers present (elevated glucose + borderline HbA1c)
+• Anemia requires further workup to determine cause
+• Priority: Address glucose abnormalities and investigate anemia etiology
+
+GUIDELINES:
+- Be specific about clinical implications
+- Mention common causes for abnormalities
+- Suggest appropriate follow-up tests or monitoring
+- Note drug interactions or comorbidity considerations when relevant
+- Identify patterns across multiple parameters
+- Use medical terminology appropriate for healthcare professionals
+- Always provide actionable clinical recommendations
+`;
+  } else {
+    // Regular user prompt - simple classification only
+    return `
 You are Health Insight Agent (HIA). Your ONLY job is to classify medical test values as NORMAL, HIGH, or LOW.
 
 STRICT RULES - NO EXCEPTIONS:
@@ -200,7 +327,59 @@ DO NOT ADD:
 ❌ Any text outside the bullet point format
 
 Your output should be ONLY the categorized list above. Nothing else.
-      `,
+`;
+  }
+}
+
+/**
+ * Report → Insight mode with role-based analysis
+ */
+async function analyzeReport({ reportText, imageBase64, imageType = 'image/jpeg', fileBuffer, fileType, userRole = 'USER' }) {
+  let textToAnalyze = reportText;
+
+  // Step 1: Extract text from file if provided
+  if (fileBuffer || imageBase64) {
+    try {
+      let extractedText;
+      
+      const isPDF = fileType === 'application/pdf' || imageType === 'application/pdf';
+      
+      if (isPDF) {
+        console.log('📄 Detected PDF file');
+        const buffer = fileBuffer || Buffer.from(imageBase64, 'base64');
+        extractedText = await extractTextFromPDF(buffer);
+      } else {
+        console.log('📸 Detected image file');
+        
+        if (USE_TESSERACT) {
+          const imageBuffer = fileBuffer || Buffer.from(imageBase64, 'base64');
+          extractedText = await extractTextWithTesseract(imageBuffer);
+        } else {
+          const base64Image = imageBase64 || fileBuffer.toString('base64');
+          extractedText = await extractTextFromImage(base64Image, imageType);
+        }
+      }
+      
+      if (reportText) {
+        textToAnalyze = `${extractedText}\n\nAdditional Notes:\n${reportText}`;
+      } else {
+        textToAnalyze = extractedText;
+      }
+    } catch (error) {
+      console.error('❌ File text extraction failed:', error.message);
+      throw new Error('Failed to extract text from file. Please try again or use text input instead.');
+    }
+  }
+
+  // Step 2: Analyze with role-specific prompt
+  console.log(`🔍 Analyzing for role: ${userRole}`);
+  
+  const systemPrompt = getAnalysisSystemPrompt(userRole);
+  
+  const rawOutput = await callLLM(TEXT_MODEL, [
+    {
+      role: "system",
+      content: systemPrompt,
     },
     {
       role: "user",
@@ -208,9 +387,14 @@ Your output should be ONLY the categorized list above. Nothing else.
     },
   ]);
 
-  console.log('✅ Step 2 complete: Analysis finished');
+  console.log('✅ Analysis complete');
 
-  // Clean and validate the output
+  // For HC users, return raw output (includes clinical notes)
+  if (userRole === 'HC' || userRole === 'ADMIN') {
+    return rawOutput;
+  }
+
+  // For regular users, clean the output
   const result = processReportOutput(rawOutput);
 
   if (!result.success) {

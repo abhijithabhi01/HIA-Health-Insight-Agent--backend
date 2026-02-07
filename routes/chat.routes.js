@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const auth = require('../middleware/auth');
+const { auth } = require('../middleware/auth');
 const mongoose = require('mongoose');
 const Chat = require('../models/Chat');
 const { hiaChat } = require('../services/openrouter.service');
