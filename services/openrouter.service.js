@@ -9,8 +9,8 @@ const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const USE_TESSERACT = true;
 
 // Vision models for OCR (fallback if Tesseract is disabled)
-const VISION_MODEL = "google/gemma-4-31b-it:free"; 
-const VISION_MODEL_FALLBACK = "google/gemma-4-31b-it:free";
+const VISION_MODEL = "meta-llama/llama-3.2-3b-instruct:free"; 
+const VISION_MODEL_FALLBACK = "meta-llama/llama-3.2-3b-instruct:free";
 
 // Text model for analysis
 const TEXT_MODEL = "arcee-ai/trinity-large-preview:free"; 
