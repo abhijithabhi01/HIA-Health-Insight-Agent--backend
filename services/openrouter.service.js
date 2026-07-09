@@ -13,12 +13,16 @@ const VISION_MODEL = "allenai/molmo-2-8b:free";
 const VISION_MODEL_FALLBACK = "meta-llama/llama-3.2-11b-vision-instruct:free";
 
 // Text model for analysis (tried in order; each is a different provider's free tier,
-// so a 429 on one doesn't mean the others are limited too)
+// so a 429 on one doesn't mean the others are limited too).
+// Final entry is OpenRouter's own auto-router, which always resolves to whatever
+// free model is currently live — a self-healing catch-all so this list doesn't
+// need manual upkeep every time a provider drops a model (as gemini-2.0-flash-exp did).
 const TEXT_MODEL = "arcee-ai/trinity-large-preview:free";
 const TEXT_MODEL_FALLBACKS = [
   "meta-llama/llama-3.3-70b-instruct:free",
+  "openai/gpt-oss-20b:free",
   "meta-llama/llama-3.2-3b-instruct:free",
-  "google/gemini-2.0-flash-exp:free",
+  "openrouter/free",
 ];
 
 /**
