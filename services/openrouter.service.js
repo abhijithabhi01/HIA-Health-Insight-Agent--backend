@@ -13,7 +13,7 @@ const VISION_MODEL = "meta-llama/llama-3.2-3b-instruct:free";
 const VISION_MODEL_FALLBACK = "meta-llama/llama-3.2-3b-instruct:free";
 
 // Text model for analysis
-const TEXT_MODEL = "arcee-ai/trinity-large-preview:free"; 
+const TEXT_MODEL = "meta-llama/llama-3.2-3b-instruct:free"; 
 
 /**
  * Call LLM with error handling and retry logic
