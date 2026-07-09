@@ -9,14 +9,23 @@ const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const USE_TESSERACT = true;
 
 // Vision models for OCR (fallback if Tesseract is disabled)
-const VISION_MODEL = "meta-llama/llama-3.2-3b-instruct:free"; 
-const VISION_MODEL_FALLBACK = "meta-llama/llama-3.2-3b-instruct:free";
+const VISION_MODEL = "allenai/molmo-2-8b:free"; 
+const VISION_MODEL_FALLBACK = "meta-llama/llama-3.2-11b-vision-instruct:free";
 
-// Text model for analysis
-const TEXT_MODEL = "meta-llama/llama-3.2-3b-instruct:free"; 
+// Text model for analysis (tried in order; each is a different provider's free tier,
+// so a 429 on one doesn't mean the others are limited too)
+const TEXT_MODEL = "arcee-ai/trinity-large-preview:free";
+const TEXT_MODEL_FALLBACKS = [
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "meta-llama/llama-3.2-3b-instruct:free",
+  "google/gemini-2.0-flash-exp:free",
+];
 
 /**
- * Call LLM with error handling and retry logic
+ * Call LLM with error handling and retry logic for a single model.
+ * Only retries transient errors (network blips, 5xx). A 429 is NOT retried
+ * here since retrying the same rate-limited model wastes attempts — callers
+ * that want cross-model fallback should use callLLMWithFallback instead.
  */
 async function callLLM(model, messages, retries = 2) {
   let lastError;
@@ -49,12 +58,18 @@ async function callLLM(model, messages, retries = 2) {
       return response.data.choices[0].message.content;
     } catch (error) {
       lastError = error;
-      
-      const isRetryable = 
+
+      // 429 = rate limited on THIS model. Don't burn retries sleeping and
+      // hitting the same wall again — bail out immediately so the caller
+      // can move on to a different model.
+      if (error.response?.status === 429) {
+        break;
+      }
+
+      const isRetryable =
         error.code === 'ECONNRESET' ||
         error.code === 'ETIMEDOUT' ||
         error.code === 'ECONNREFUSED' ||
-        error.response?.status === 429 ||
         error.response?.status >= 500;
       
       if (!isRetryable || attempt === retries) {
@@ -66,6 +81,28 @@ async function callLLM(model, messages, retries = 2) {
   }
   
   console.error(`❌ LLM Error (${model}) after ${retries + 1} attempts:`, lastError.response?.data || lastError.message);
+  throw lastError;
+}
+
+/**
+ * Try a primary model, then fall through a list of backup models in order.
+ * Used for text generation where several interchangeable free models exist.
+ */
+async function callLLMWithFallback(models, messages, retries = 1) {
+  let lastError;
+
+  for (const model of models) {
+    try {
+      const result = await callLLM(model, messages, retries);
+      return result;
+    } catch (error) {
+      lastError = error;
+      const status = error.response?.status;
+      console.log(`⚠️ Model ${model} failed (${status || error.code || error.message}), trying next fallback...`);
+    }
+  }
+
+  console.error('❌ All text models exhausted:', lastError.response?.data || lastError.message);
   throw lastError;
 }
 
@@ -189,7 +226,7 @@ async function extractTextFromImage(imageBase64, imageType) {
  * Chat mode
  */
 async function hiaChat({ history = [], userMessage }) {
-  return callLLM(TEXT_MODEL, [
+  return callLLMWithFallback([TEXT_MODEL, ...TEXT_MODEL_FALLBACKS], [
     {
       role: "system",
       content: `You are Health Insight Agent (HIA), a helpful health information assistant.
@@ -376,7 +413,7 @@ async function analyzeReport({ reportText, imageBase64, imageType = 'image/jpeg'
   
   const systemPrompt = getAnalysisSystemPrompt(userRole);
   
-  const rawOutput = await callLLM(TEXT_MODEL, [
+  const rawOutput = await callLLMWithFallback([TEXT_MODEL, ...TEXT_MODEL_FALLBACKS], [
     {
       role: "system",
       content: systemPrompt,
